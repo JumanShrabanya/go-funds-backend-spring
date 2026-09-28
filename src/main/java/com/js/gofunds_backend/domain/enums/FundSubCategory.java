@@ -1,0 +1,19 @@
+package com.js.gofunds_backend.domain.enums;
+
+public enum FundSubCategory {
+	LARGE_CAP,
+	MID_CAP,
+	SMALL_CAP,
+	ELSS,
+	DIVIDEND_YIELD,
+	INDEX,
+	SECTORAL,
+	OVERNIGHT,
+	LIQUID,
+	SHORT_DURATION,
+	CORPORATE_BOND,
+	GOVT_BOND,
+	BALANCED,
+	CONSERVATIVE,
+	AGGRESSIVE_HYBRID
+}
