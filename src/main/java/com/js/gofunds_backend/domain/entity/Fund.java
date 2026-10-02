@@ -53,7 +53,10 @@ public class Fund {
 	@Column(name = "risk_level", nullable = false)
 	private RiskLevel riskLevel;
 
-	@Column(name = "current_nav", nullable = false, precision = 10, scale = 4)
+	// NUMERIC(10,4) capped NAV at 999,999.9999, but AMFI publishes 12 schemes
+	// above 1,000,000 (max 2,540,201.9508), which aborted the whole seed batch.
+	// Keep this in step with V2__widen_fund_current_nav.sql.
+	@Column(name = "current_nav", nullable = false, precision = 18, scale = 4)
 	private BigDecimal currentNav;
 
 	@Column(name = "return_rate_1_year", precision = 10, scale = 4)
