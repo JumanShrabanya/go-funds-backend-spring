@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Master changelog. spring.liquibase.change-log points here.
+
+  Why a master instead of pointing change-log straight at db/migration/ ?
+  Liquibase 5 rejects a bare directory ("Cannot find parser that supports
+  classpath:db/migration/"), and a formatted-SQL "include" directive is a
+  paid Liquibase feature. includeAll in an XML master is the free,
+  supported equivalent.
+
+  relativeToChangelogFile="true" is load-bearing: it makes each included file
+  resolve to the same identity Liquibase already recorded for it, namely
+  db/migration/V1__initial_schema.sql. Dropping it re-records V1's changesets
+  under a new filename, and Liquibase would re-evaluate all of them.
+
+  includeAll sorts by filename, so V* ordering is version order. Add new
+  migrations as db/migration/V3__whatever.sql and they are picked up
+  automatically with no config change.
+-->
+<databaseChangeLog
+        xmlns="http://www.liquibase.org/xml/ns/dbchangelog"
+        xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+        xsi:schemaLocation="http://www.liquibase.org/xml/ns/dbchangelog
+        http://www.liquibase.org/xml/ns/dbchangelog/dbchangelog-4.20.xsd">
+
+    <includeAll path="migration" relativeToChangelogFile="true"/>
+
+</databaseChangeLog>
