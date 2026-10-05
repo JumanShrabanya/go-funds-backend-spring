@@ -24,6 +24,16 @@ public interface FundRepository extends JpaRepository<Fund, UUID>, JpaSpecificat
 
 	List<Fund> findByRiskLevelIn(Collection<RiskLevel> riskLevels);
 
+	/**
+	 * Funds in one category whose risk level is in the given set.
+	 *
+	 * <p>Used by the planner to build a shortlist. Deliberately unpaged - the
+	 * caller caps the result - because paging here would truncate whole
+	 * sub-categories and leave the shortlist unbalanced.
+	 */
+	List<Fund> findByMainCategoryAndRiskLevelIn(FundMainCategory mainCategory,
+			Collection<RiskLevel> riskLevels);
+
 	@Query("""
 			select f from Fund f
 			where f.mainCategory = :mainCategory
