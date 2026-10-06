@@ -1,5 +1,6 @@
 package com.js.gofunds_backend.mail.service;
 
+import com.js.gofunds_backend.mail.MailDeliveryException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.mail.SimpleMailMessage;
@@ -40,7 +41,7 @@ public class EmailService {
 			log.info("Email sent to: {} (subject: {})", to, subject);
 		} catch (Exception ex) {
 			log.error("Failed to send email to: {}", to, ex);
-			throw new RuntimeException("Email send failed", ex);
+			throw new MailDeliveryException("Email send failed", ex);
 		}
 	}
 }

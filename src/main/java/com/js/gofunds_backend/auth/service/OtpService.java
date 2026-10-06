@@ -6,6 +6,7 @@ import com.js.gofunds_backend.domain.entity.EmailOtp;
 import com.js.gofunds_backend.domain.entity.User;
 import com.js.gofunds_backend.domain.enums.OtpType;
 import com.js.gofunds_backend.domain.repository.EmailOtpRepository;
+import com.js.gofunds_backend.mail.MailDeliveryException;
 import com.js.gofunds_backend.mail.service.EmailService;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -22,14 +23,17 @@ public class OtpService {
 	private final EmailOtpRepository otpRepository;
 	private final EmailService emailService;
 	private final int expirationMinutes;
+	private final boolean logOtp;
 
 	public OtpService(
 			EmailOtpRepository otpRepository,
 			EmailService emailService,
-			@Value("${otp.expiration-minutes:15}") int expirationMinutes) {
+			@Value("${otp.expiration-minutes:15}") int expirationMinutes,
+			@Value("${app.dev.log-otp:false}") boolean logOtp) {
 		this.otpRepository = otpRepository;
 		this.emailService = emailService;
 		this.expirationMinutes = expirationMinutes;
+		this.logOtp = logOtp;
 	}
 
 	@Transactional
@@ -44,11 +48,30 @@ public class OtpService {
 		entity.setExpiresAt(LocalDateTime.now().plusMinutes(expirationMinutes));
 		otpRepository.save(entity);
 
-		log.info("OTP for user {} ({}): {}", user.getEmail(), type, otp);
-		if (type == OtpType.VERIFICATION) {
-			emailService.sendVerificationEmail(user.getEmail(), otp, expirationMinutes);
-		} else if (type == OtpType.PASSWORD_RESET) {
-			emailService.sendPasswordResetEmail(user.getEmail(), otp, expirationMinutes);
+		if (logOtp) {
+			log.info("OTP for user {} ({}): {}", user.getEmail(), type, otp);
+		}
+
+		sendEmail(user, type, otp);
+	}
+
+	/**
+	 * Delivery is best-effort on purpose. This method runs inside the caller's
+	 * transaction ({@code AuthService.register} and {@code forgotPassword} are both
+	 * {@code @Transactional}), so rethrowing a mail failure would roll back a
+	 * successful registration or a freshly issued reset code because Gmail was
+	 * unreachable. The OTP is already stored, and both flows have a resend
+	 * endpoint, so dropping the email costs the user one extra click rather than
+	 * their account.
+	 */
+	private void sendEmail(User user, OtpType type, String otp) {
+		try {
+			switch (type) {
+				case VERIFICATION -> emailService.sendVerificationEmail(user.getEmail(), otp, expirationMinutes);
+				case PASSWORD_RESET -> emailService.sendPasswordResetEmail(user.getEmail(), otp, expirationMinutes);
+			}
+		} catch (MailDeliveryException ex) {
+			log.error("Could not send {} OTP to {}. It is stored and the user can request a new one.", type, user.getEmail(), ex);
 		}
 	}
 
