@@ -54,6 +54,13 @@ public class SecurityConfig {
 					.authenticationEntryPoint(new HttpStatusEntryPoint(HttpStatus.UNAUTHORIZED)))
 			.authorizeHttpRequests(auth -> auth
 				.requestMatchers("/api/v1/health").permitAll()
+				// springdoc's own endpoints. They only expose the API surface that is
+				// already public plus schema, so they do not leak anything, and the
+				// catch-all .anyRequest().authenticated() below would otherwise lock
+				// out Swagger UI entirely. /swagger-ui/** is the webjars UI itself;
+				// /v3/api-docs** is the raw document.
+				.requestMatchers("/v3/api-docs", "/v3/api-docs/**", "/swagger-ui.html",
+						"/swagger-ui/**").permitAll()
 				.requestMatchers("/api/v1/auth/me", "/api/v1/auth/logout").authenticated()
 				.requestMatchers("/api/v1/auth/**").permitAll()
 				.requestMatchers(HttpMethod.GET, "/api/v1/funds/**").authenticated()
