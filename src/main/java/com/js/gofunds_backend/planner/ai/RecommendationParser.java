@@ -93,6 +93,13 @@ public class RecommendationParser {
 			}
 		}
 
+		log.warn("Model completion ended mid-JSON ({} chars). Tail: {}",
+				completion.length(), tail(completion));
 		throw new ApiException(HttpStatus.BAD_GATEWAY, "The AI model returned truncated JSON");
+	}
+
+	/** Last 300 characters, enough to see where the completion ran out. */
+	private static String tail(String completion) {
+		return completion.substring(Math.max(0, completion.length() - 300));
 	}
 }
