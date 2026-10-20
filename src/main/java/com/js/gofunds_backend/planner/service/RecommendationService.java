@@ -8,6 +8,7 @@ import com.js.gofunds_backend.planner.ai.Recommendation;
 import com.js.gofunds_backend.planner.ai.RecommendationParser;
 import com.js.gofunds_backend.planner.ai.RecommendationValidator;
 import com.js.gofunds_backend.planner.dto.InvestmentPlanRequest;
+import com.js.gofunds_backend.planner.service.GoalStrategy.PortfolioPolicy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
@@ -66,11 +67,16 @@ public class RecommendationService {
 			7. blendedReturnRate is an expected annual return percentage as a number, for
 			   example 12.5 for 12.5%. It must be a realistic, non-negative figure. Do not
 			   compute returns, growth or future value - the application does that itself.
-			8. Match the asset allocation to the investment goal and horizon. Money needed
-			   within 3 years must not sit in high-volatility equity funds.
+			8. assetAllocation MUST stay within 10 points of the target asset allocation
+			   given in the investor profile, which already reflects the goal, horizon and
+			   risk appetite. Money needed within 3 years must not sit in high-volatility
+			   equity funds.
+			9. Prefer funds whose category is listed as goal-relevant in the investor
+			   profile. Do not pad the plan with funds from unrelated categories.
 			""";
 
 	private final FundCatalogService fundCatalogService;
+	private final GoalStrategy goalStrategy;
 	private final GeminiClient geminiClient;
 	private final RecommendationParser parser;
 	private final RecommendationValidator validator;
@@ -84,13 +90,15 @@ public class RecommendationService {
 				? RiskProfile.MODERATE
 				: request.riskProfile();
 
-		List<Fund> catalogue = fundCatalogService.eligibleFunds(profile, request.investmentHorizon());
+		List<Fund> catalogue = fundCatalogService.eligibleFunds(
+				request.goal(), profile, request.investmentHorizon());
 		if (catalogue.isEmpty()) {
 			throw new ApiException(HttpStatus.CONFLICT,
 					"No funds are available to build a plan from. The fund catalogue has not been synced.");
 		}
 
-		String completion = geminiClient.complete(SYSTEM_PROMPT, userPrompt(request, profile, catalogue));
+		PortfolioPolicy policy = goalStrategy.policyFor(request.goal(), profile, request.investmentHorizon());
+		String completion = geminiClient.complete(SYSTEM_PROMPT, userPrompt(request, profile, policy, catalogue));
 		Recommendation validated = validator.validate(parser.parse(completion), catalogue);
 
 		log.debug("Recommendation accepted with {} funds for {}",
@@ -98,7 +106,8 @@ public class RecommendationService {
 		return validated;
 	}
 
-	private String userPrompt(InvestmentPlanRequest request, RiskProfile profile, List<Fund> catalogue) {
+	private String userPrompt(InvestmentPlanRequest request, RiskProfile profile,
+			PortfolioPolicy policy, List<Fund> catalogue) {
 		StringJoiner rows = new StringJoiner("\n");
 		for (Fund fund : catalogue) {
 			rows.add("  - fundId: " + fund.getId()
@@ -118,6 +127,11 @@ public class RecommendationService {
 				  horizon: %s
 				  risk profile: %s
 
+				TARGET ASSET ALLOCATION for this goal, horizon and risk appetite
+				  equity: %d%%, debt: %d%%, hybrid: %d%%
+				  keep assetAllocation within 10 points of these figures
+				  goal-relevant categories: %s
+
 				ELIGIBLE FUNDS (%d of the schemes available; choose only from this list)
 				%s
 
@@ -129,6 +143,10 @@ public class RecommendationService {
 						request.goal(),
 						request.investmentHorizon(),
 						profile,
+						policy.equityPercent(),
+						policy.debtPercent(),
+						policy.hybridPercent(),
+						policy.prioritizedSubCategories(),
 						catalogue.size(),
 						rows);
 	}

@@ -3,6 +3,7 @@ package com.js.gofunds_backend.planner.service;
 import com.js.gofunds_backend.domain.entity.Fund;
 import com.js.gofunds_backend.domain.enums.FundMainCategory;
 import com.js.gofunds_backend.domain.enums.FundSubCategory;
+import com.js.gofunds_backend.domain.enums.InvestmentGoal;
 import com.js.gofunds_backend.domain.enums.InvestmentHorizon;
 import com.js.gofunds_backend.domain.enums.RiskLevel;
 import com.js.gofunds_backend.domain.enums.RiskProfile;
@@ -42,15 +43,21 @@ class FundCatalogServiceTest {
 
 	@BeforeEach
 	void setUp() {
-		catalogService = new FundCatalogService(fundRepository, 30);
+		catalogService = new FundCatalogService(fundRepository, new GoalStrategy(), 30);
 	}
 
 	private static Fund fund(String name, FundSubCategory subCategory, FundMainCategory mainCategory) {
+		return fund(name, subCategory, mainCategory, null);
+	}
+
+	private static Fund fund(String name, FundSubCategory subCategory, FundMainCategory mainCategory,
+			String fundHouse) {
 		Fund fund = new Fund();
 		fund.setId(UUID.randomUUID());
 		fund.setSchemeName(name);
 		fund.setSubCategory(subCategory);
 		fund.setMainCategory(mainCategory);
+		fund.setFundHouse(fundHouse);
 		fund.setCurrentNav(new BigDecimal("100.0000"));
 		return fund;
 	}
@@ -81,8 +88,8 @@ class FundCatalogServiceTest {
 	void returnsAnEmptyListWhenNothingIsEligible() {
 		givenFundsByCategory(null, null, null);
 
-		assertTrue(catalogService.eligibleFunds(RiskProfile.MODERATE, InvestmentHorizon.FIVE_TO_TEN_YEARS)
-				.isEmpty());
+		assertTrue(catalogService.eligibleFunds(InvestmentGoal.WEALTH_CREATION, RiskProfile.MODERATE,
+				InvestmentHorizon.FIVE_TO_TEN_YEARS).isEmpty());
 	}
 
 	@Test
@@ -94,7 +101,7 @@ class FundCatalogServiceTest {
 		when(fundRepository.findByMainCategoryAndRiskLevelIn(eq(FundMainCategory.EQUITY), anyCollection()))
 				.thenReturn(many);
 
-		assertEquals(30, catalogService.eligibleFunds(RiskProfile.AGGRESSIVE,
+		assertEquals(30, catalogService.eligibleFunds(InvestmentGoal.WEALTH_CREATION, RiskProfile.AGGRESSIVE,
 				InvestmentHorizon.MORE_THAN_10_YEARS).size());
 	}
 
@@ -112,11 +119,11 @@ class FundCatalogServiceTest {
 		when(fundRepository.findByMainCategoryAndRiskLevelIn(eq(FundMainCategory.EQUITY), anyCollection()))
 				.thenReturn(equity);
 
-		List<Fund> shortlist = catalogService.eligibleFunds(RiskProfile.MODERATE,
-				InvestmentHorizon.FIVE_TO_TEN_YEARS);
+		List<Fund> shortlist = catalogService.eligibleFunds(InvestmentGoal.WEALTH_CREATION,
+				RiskProfile.MODERATE, InvestmentHorizon.FIVE_TO_TEN_YEARS);
 
-		// Cap is 30 / 3 sub-categories = 10, so large caps stop at 10 even though
-		// 100 exist, and the two scarce sleeves contribute one each.
+		// All three sleeves are goal-relevant, cap is 30 / 3 = 10, so large caps
+		// stop at 10 even though 100 exist and the two scarce sleeves contribute one.
 		assertEquals(12, shortlist.size());
 		assertEquals(3, shortlist.stream().map(Fund::getSubCategory).distinct().count(),
 				"each sub-category must be represented");
@@ -138,8 +145,72 @@ class FundCatalogServiceTest {
 		when(fundRepository.findByMainCategoryAndRiskLevelIn(eq(FundMainCategory.EQUITY), anyCollection()))
 				.thenReturn(onlyLargeCaps);
 
-		assertEquals(30, catalogService.eligibleFunds(RiskProfile.AGGRESSIVE,
+		assertEquals(30, catalogService.eligibleFunds(InvestmentGoal.WEALTH_CREATION, RiskProfile.AGGRESSIVE,
 				InvestmentHorizon.MORE_THAN_10_YEARS).size());
+	}
+
+	@Test
+	void prioritisesTheGoalsRelevantSleevesOverTheFallback() {
+		// A tax-saving request must surface ELSS even when the catalogue is
+		// dominated by a sleeve the goal does not care about.
+		List<Fund> equity = new ArrayList<>();
+		for (int i = 0; i < 100; i++) {
+			equity.add(fund("Sectoral " + i, FundSubCategory.SECTORAL, FundMainCategory.EQUITY));
+		}
+		equity.add(fund("Elss Growth", FundSubCategory.ELSS, FundMainCategory.EQUITY));
+		givenFundsByCategory(null, null, null);
+		when(fundRepository.findByMainCategoryAndRiskLevelIn(eq(FundMainCategory.EQUITY), anyCollection()))
+				.thenReturn(equity);
+
+		List<Fund> shortlist = catalogService.eligibleFunds(InvestmentGoal.TAX_SAVING, RiskProfile.MODERATE,
+				InvestmentHorizon.FIVE_TO_TEN_YEARS);
+
+		assertEquals(FundSubCategory.ELSS, shortlist.get(0).getSubCategory(),
+				"the goal-critical sleeve must lead the shortlist");
+		assertTrue(shortlist.stream().anyMatch(f -> f.getSubCategory() == FundSubCategory.ELSS));
+	}
+
+	@Test
+	void capsThePreferredSleevesBeforeFallingBackToOthers() {
+		List<Fund> equity = new ArrayList<>();
+		for (int i = 0; i < 100; i++) {
+			equity.add(fund("Sectoral " + i, FundSubCategory.SECTORAL, FundMainCategory.EQUITY));
+		}
+		equity.add(fund("Large Cap A", FundSubCategory.LARGE_CAP, FundMainCategory.EQUITY));
+		equity.add(fund("Large Cap B", FundSubCategory.LARGE_CAP, FundMainCategory.EQUITY));
+		givenFundsByCategory(null, null, null);
+		when(fundRepository.findByMainCategoryAndRiskLevelIn(eq(FundMainCategory.EQUITY), anyCollection()))
+				.thenReturn(equity);
+
+		List<Fund> shortlist = catalogService.eligibleFunds(InvestmentGoal.TAX_SAVING, RiskProfile.MODERATE,
+				InvestmentHorizon.FIVE_TO_TEN_YEARS);
+
+		// LARGE_CAP is goal-relevant and fills 2 slots first; SECTORAL is only a
+		// fallback and is appended after.
+		assertEquals(2, shortlist.stream()
+				.filter(f -> f.getSubCategory() == FundSubCategory.LARGE_CAP).count());
+		assertEquals(FundSubCategory.LARGE_CAP, shortlist.get(0).getSubCategory());
+		assertEquals(30, shortlist.size());
+	}
+
+	@Test
+	void spreadsAPreferredSleeveAcrossFundHouses() {
+		catalogService = new FundCatalogService(fundRepository, new GoalStrategy(), 3);
+		List<Fund> equity = List.of(
+				fund("Alpha A", FundSubCategory.LARGE_CAP, FundMainCategory.EQUITY, "Alpha AMC"),
+				fund("Alpha B", FundSubCategory.LARGE_CAP, FundMainCategory.EQUITY, "Alpha AMC"),
+				fund("Beta A", FundSubCategory.LARGE_CAP, FundMainCategory.EQUITY, "Beta AMC"),
+				fund("Gamma A", FundSubCategory.LARGE_CAP, FundMainCategory.EQUITY, "Gamma AMC"));
+		givenFundsByCategory(null, null, null);
+		when(fundRepository.findByMainCategoryAndRiskLevelIn(eq(FundMainCategory.EQUITY), anyCollection()))
+				.thenReturn(equity);
+
+		List<Fund> shortlist = catalogService.eligibleFunds(InvestmentGoal.WEALTH_CREATION,
+				RiskProfile.MODERATE, InvestmentHorizon.FIVE_TO_TEN_YEARS);
+
+		assertEquals(3, shortlist.size());
+		assertEquals(3, shortlist.stream().map(Fund::getFundHouse).distinct().count(),
+				"the budget must go to distinct fund houses before repeating one");
 	}
 
 	@Test
@@ -149,10 +220,10 @@ class FundCatalogServiceTest {
 				null,
 				fund("Gamma Fund", FundSubCategory.LIQUID, FundMainCategory.DEBT));
 
-		List<Fund> first = catalogService.eligibleFunds(RiskProfile.MODERATE,
-				InvestmentHorizon.FIVE_TO_TEN_YEARS);
-		List<Fund> second = catalogService.eligibleFunds(RiskProfile.MODERATE,
-				InvestmentHorizon.FIVE_TO_TEN_YEARS);
+		List<Fund> first = catalogService.eligibleFunds(InvestmentGoal.WEALTH_CREATION,
+				RiskProfile.MODERATE, InvestmentHorizon.FIVE_TO_TEN_YEARS);
+		List<Fund> second = catalogService.eligibleFunds(InvestmentGoal.WEALTH_CREATION,
+				RiskProfile.MODERATE, InvestmentHorizon.FIVE_TO_TEN_YEARS);
 
 		assertEquals(first.stream().map(Fund::getSchemeName).toList(),
 				second.stream().map(Fund::getSchemeName).toList());
@@ -162,7 +233,8 @@ class FundCatalogServiceTest {
 	void excludesHighRiskFundsForAShortHorizon() {
 		givenFundsByCategory(null, null, null);
 
-		catalogService.eligibleFunds(RiskProfile.AGGRESSIVE, InvestmentHorizon.LESS_THAN_3_YEARS);
+		catalogService.eligibleFunds(InvestmentGoal.WEALTH_CREATION, RiskProfile.AGGRESSIVE,
+				InvestmentHorizon.LESS_THAN_3_YEARS);
 
 		List<RiskLevel> requested = capturedRiskLevels();
 		assertTrue(requested.stream()
@@ -174,7 +246,8 @@ class FundCatalogServiceTest {
 	void allowsHighRiskFundsForALongHorizon() {
 		givenFundsByCategory(null, null, null);
 
-		catalogService.eligibleFunds(RiskProfile.AGGRESSIVE, InvestmentHorizon.MORE_THAN_10_YEARS);
+		catalogService.eligibleFunds(InvestmentGoal.WEALTH_CREATION, RiskProfile.AGGRESSIVE,
+				InvestmentHorizon.MORE_THAN_10_YEARS);
 
 		assertTrue(capturedRiskLevels().contains(RiskLevel.VERY_HIGH));
 	}
@@ -186,8 +259,8 @@ class FundCatalogServiceTest {
 		Fund shared = fund("Shared", FundSubCategory.LARGE_CAP, FundMainCategory.EQUITY);
 		givenFundsByCategory(shared, shared, null);
 
-		List<Fund> shortlist = catalogService.eligibleFunds(RiskProfile.MODERATE,
-				InvestmentHorizon.FIVE_TO_TEN_YEARS);
+		List<Fund> shortlist = catalogService.eligibleFunds(InvestmentGoal.WEALTH_CREATION,
+				RiskProfile.MODERATE, InvestmentHorizon.FIVE_TO_TEN_YEARS);
 
 		assertEquals(1, shortlist.size());
 	}

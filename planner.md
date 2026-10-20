@@ -91,19 +91,26 @@ Status codes are chosen so the client can tell the three failure modes apart:
 ### The shortlist
 
 `FundCatalogService.eligibleFunds` picks at most `planner.catalog.size` funds
-(default **30**). Two things to know:
+(default **30**). `GoalStrategy` turns the questionnaire into a portfolio policy —
+the sub-categories the goal wants and a target asset split — and the shortlist is
+built from that policy:
 
+- **Goal-driven.** The fund sleeves come from the goal, so a tax-saving request is
+  offered ELSS and a home-purchase request is offered short-duration debt, rather
+  than every goal receiving the same generic equity list. `TAX_SAVING` treats ELSS
+  as *required*: it must lead the shortlist when the catalogue has any.
+- **Fallbacks only top up.** When the goal's preferred sleeves cannot fill the
+  budget the remaining sleeves are appended, but the preferred sleeves keep their
+  full share rather than being diluted by irrelevant ones.
+- **Spread across fund houses.** Within a sleeve, one fund per fund house is taken
+  first, so the model chooses between managers, not between five flavours of the
+  same AMC.
 - **Not ranked by return.** The AMFI feed carries no return history, so
   `returnRate1Year` is `null` for every row and ordering by it would be arbitrary.
-  Funds are sorted by sub-category then scheme name, so the same request always
-  produces the same shortlist.
-- **Capped per sub-category** at `catalogSize / distinctSubCategories`. Without a
-  cap, any request allowing equity would hand over ~5,660 large caps and blow the
-  context window. Dividing by the number of *distinct* sub-categories means a
-  single-sleeve catalogue keeps the whole budget instead of being needlessly
-  trimmed.
+  Everything is ordered deterministically, so the same request always produces the
+  same shortlist.
 
-Eligibility filters:
+Eligibility filters, applied before the goal policy chooses sleeves:
 
 | Filter | Rule |
 |---|---|
@@ -113,17 +120,32 @@ Eligibility filters:
 
 ### The prompt
 
-`RecommendationService.SYSTEM_PROMPT` states the JSON shape and eight hard rules.
-The user prompt carries the investor profile and the shortlist, one fund per line:
+`RecommendationService.SYSTEM_PROMPT` states the JSON shape and nine hard rules.
+The user prompt carries the investor profile, the target asset allocation, the
+goal-relevant categories and the shortlist, one fund per line:
 
 ```
+INVESTOR PROFILE
+  monthly investment: <amount> INR
+  goal: <GOAL>
+  horizon: <HORIZON>
+  risk profile: <PROFILE>
+
+TARGET ASSET ALLOCATION for this goal, horizon and risk appetite
+  equity: <e>%, debt: <d>%, hybrid: <h>%
+  keep assetAllocation within 10 points of these figures
+  goal-relevant categories: [<SUB>, ...]
+
+ELIGIBLE FUNDS (...)
   - fundId: <uuid> | name: <scheme name> | house: <fund house>
     | category: <MAIN/SUB> | risk: <level> | nav: <nav> | 1y return: <n/a>
     | sip: <true|false>
 ```
 
-A `null` 1y return renders as `n/a` with an explicit instruction not to read it as
-zero.
+The target allocation comes from `GoalStrategy`, which tilts a per-goal base split
+by risk appetite (±15 points of equity/debt) and then caps equity for a short
+horizon. A `null` 1y return renders as `n/a` with an explicit instruction not to
+read it as zero.
 
 ---
 
@@ -215,7 +237,8 @@ nothing to fail over to and a retry loop would just delay the 503.
 | `GeminiClientTest` | No API key → unavailable + 503, not a boot failure |
 | `RecommendationParserTest` | Fences, prose, braces in strings, truncation → 502 |
 | `RecommendationValidatorTest` | Every repair and every rejection |
-| `FundCatalogServiceTest` | Cap, sub-category balance, horizon ceiling, determinism, no duplicates |
+| `FundCatalogServiceTest` | Cap, sub-category balance, goal-sleeve priority, ELSS for tax saving, fund-house spread, horizon ceiling, determinism, no duplicates |
+| `GoalStrategyTest` | Per-goal allocation, risk tilt, short-horizon equity cap, required ELSS, allocation always totals 100 |
 | `InvestmentCalculatorServiceTest` | SIP maths, horizon mapping, 0/null-rate and negative-amount guards |
 | `PlanFundMapperTest` | JSONB round-trip, malformed-entry tolerance |
 | `PlannerStatsServiceTest` | Aggregates, null projections, goal grouping and ordering |

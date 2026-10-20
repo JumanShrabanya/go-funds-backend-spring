@@ -53,6 +53,24 @@ class FundClassifierTest {
 	}
 
 	/**
+	 * Flexible hybrids have no "hybrid"/"balanced" token in their names, so before
+	 * these rules existed they fell through to the equity fallback and were offered
+	 * to the model as large-cap equity.
+	 */
+	@Test
+	void classifiesFlexibleHybridsThatCarryNoHybridKeyword() {
+		assertClassified("HDFC Arbitrage Fund", FundMainCategory.HYBRID, FundSubCategory.BALANCED, RiskLevel.LOW_TO_MODERATE);
+		assertClassified("ICICI Prudential Equity Savings Fund", FundMainCategory.HYBRID,
+				FundSubCategory.BALANCED, RiskLevel.LOW_TO_MODERATE);
+		assertClassified("Nippon India Multi Asset Fund", FundMainCategory.HYBRID, FundSubCategory.BALANCED,
+				RiskLevel.MODERATE);
+		assertClassified("Kotak Asset Allocation Fund", FundMainCategory.HYBRID, FundSubCategory.BALANCED,
+				RiskLevel.MODERATE);
+		assertClassified("ICICI Prudential Equity & Debt Fund", FundMainCategory.HYBRID,
+				FundSubCategory.BALANCED, RiskLevel.MODERATE);
+	}
+
+	/**
 	 * "etf" must only match as a standalone word: squashing the name turns
 	 * "Mar<b>k</b>e<b>t</b> Fund" into "...etf...", which used to misclassify
 	 * every money market fund as an index fund.

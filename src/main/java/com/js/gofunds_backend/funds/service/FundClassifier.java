@@ -38,7 +38,14 @@ public final class FundClassifier {
 			rule("sector", FundMainCategory.EQUITY, FundSubCategory.SECTORAL, RiskLevel.VERY_HIGH),
 			rule("play", FundMainCategory.EQUITY, FundSubCategory.SECTORAL, RiskLevel.VERY_HIGH),
 
-			// Hybrid funds.
+			// Hybrid funds. The flexible ones are listed first because their names
+			// carry no "hybrid"/"balanced" token and would otherwise fall through to
+			// the equity fallback, presenting low-volatility hybrids as large caps.
+			rule("arbitrage", FundMainCategory.HYBRID, FundSubCategory.BALANCED, RiskLevel.LOW_TO_MODERATE),
+			rule("equity savings", FundMainCategory.HYBRID, FundSubCategory.BALANCED, RiskLevel.LOW_TO_MODERATE),
+			rule("multi asset", FundMainCategory.HYBRID, FundSubCategory.BALANCED, RiskLevel.MODERATE),
+			rule("asset allocation", FundMainCategory.HYBRID, FundSubCategory.BALANCED, RiskLevel.MODERATE),
+			rule("equity", "debt", FundMainCategory.HYBRID, FundSubCategory.BALANCED, RiskLevel.MODERATE),
 			rule("aggressive", FundMainCategory.HYBRID, FundSubCategory.AGGRESSIVE_HYBRID, RiskLevel.HIGH),
 			rule("conservative", FundMainCategory.HYBRID, FundSubCategory.CONSERVATIVE, RiskLevel.LOW_TO_MODERATE),
 			rule("balanced", FundMainCategory.HYBRID, FundSubCategory.BALANCED, RiskLevel.MODERATE),
