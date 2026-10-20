@@ -3,10 +3,12 @@ package com.js.gofunds_backend.planner.service;
 import com.js.gofunds_backend.domain.entity.Fund;
 import com.js.gofunds_backend.domain.enums.FundMainCategory;
 import com.js.gofunds_backend.domain.enums.FundSubCategory;
+import com.js.gofunds_backend.domain.enums.InvestmentGoal;
 import com.js.gofunds_backend.domain.enums.InvestmentHorizon;
 import com.js.gofunds_backend.domain.enums.RiskLevel;
 import com.js.gofunds_backend.domain.enums.RiskProfile;
 import com.js.gofunds_backend.domain.repository.FundRepository;
+import com.js.gofunds_backend.planner.service.GoalStrategy.PortfolioPolicy;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -16,6 +18,7 @@ import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Comparator;
 import java.util.EnumMap;
+import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -26,17 +29,26 @@ import java.util.stream.Collectors;
 /**
  * Builds the shortlist of funds handed to the model.
  *
- * <p>Two decisions worth knowing about:
+ * <p>Three decisions worth knowing about:
  *
  * <ul>
- *   <li><b>Not ranked by return.</b> The AMFI feed carries no return history, so
- *       {@code returnRate1Year} is null for every row and ordering by it would be
- *       arbitrary. Funds are ordered by sub-category and then by scheme name, so
- *       the same request always produces the same shortlist.
- *   <li><b>Capped per sub-category.</b> Without a cap, a request that allows
- *       equity would hand over ~5,660 large caps and blow the token budget. A
- *       small, balanced set gives the model a realistic choice instead.
+ *   <li><b>Goal-driven, not just risk-driven.</b> The fund sleeves are chosen by
+ *       {@link GoalStrategy} from the investor's goal, so a tax-saving request is
+ *       offered ELSS funds and a home-purchase request is offered short-duration
+ *       debt, instead of both receiving the same generic equity list. Risk and
+ *       horizon still filter the risk levels within those sleeves.
+ *   <li><b>Fallbacks only top up.</b> If the goal's preferred sleeves cannot fill
+ *       the budget the remaining sleeves are appended, but the preferred sleeves
+ *       keep their full share of the budget rather than being diluted.
+ *   <li><b>Spread across fund houses.</b> Within a sleeve, one fund per fund
+ *       house is taken first, so the model chooses between managers rather than
+ *       between five flavours of the same AMC.
  * </ul>
+ *
+ * <p>Not ranked by return: the AMFI feed carries no return history, so
+ * {@code returnRate1Year} is null for every row and ordering by it would be
+ * arbitrary. Everything is ordered deterministically so the same request always
+ * produces the same shortlist.
  */
 @Slf4j
 @Service
@@ -49,21 +61,24 @@ public class FundCatalogService {
 			RiskProfile.AGGRESSIVE, Set.of(RiskLevel.MODERATE, RiskLevel.HIGH, RiskLevel.VERY_HIGH)));
 
 	private final FundRepository fundRepository;
+	private final GoalStrategy goalStrategy;
 	private final int catalogSize;
 
 	public FundCatalogService(FundRepository fundRepository,
+			GoalStrategy goalStrategy,
 			@Value("${planner.catalog.size:30}") int catalogSize) {
 		this.fundRepository = fundRepository;
+		this.goalStrategy = goalStrategy;
 		this.catalogSize = catalogSize;
 	}
 
 	/**
-	 * @return up to {@code planner.catalog.size} funds eligible for this profile
-	 *         and horizon, spread across sub-categories. Never {@code null}, but
-	 *         empty when the catalogue has not been synced.
+	 * @return up to {@code planner.catalog.size} funds eligible for this goal,
+	 *         profile and horizon, weighted towards the goal's relevant sleeves.
+	 *         Never {@code null}, but empty when the catalogue has not been synced.
 	 */
 	@Transactional(readOnly = true)
-	public List<Fund> eligibleFunds(RiskProfile profile, InvestmentHorizon horizon) {
+	public List<Fund> eligibleFunds(InvestmentGoal goal, RiskProfile profile, InvestmentHorizon horizon) {
 		Set<RiskLevel> riskLevels = allowedRiskLevels(profile, horizon);
 		Collection<FundMainCategory> categories = allowedCategories(profile);
 
@@ -77,12 +92,14 @@ public class FundCatalogService {
 		}
 
 		if (eligible.isEmpty()) {
-			log.warn("No funds eligible for profile {} - is the catalogue synced?", profile);
+			log.warn("No funds eligible for goal {} profile {} - is the catalogue synced?", goal, profile);
 			return List.of();
 		}
 
-		List<Fund> shortlist = balance(eligible.values());
-		log.debug("Shortlisted {} of {} eligible funds for {}", shortlist.size(), eligible.size(), profile);
+		PortfolioPolicy policy = goalStrategy.policyFor(goal, profile, horizon);
+		List<Fund> shortlist = balance(eligible.values(), policy);
+		log.debug("Shortlisted {} of {} eligible funds for goal {} profile {}",
+				shortlist.size(), eligible.size(), goal, profile);
 		return shortlist;
 	}
 
@@ -107,29 +124,82 @@ public class FundCatalogService {
 	}
 
 	/**
-	 * Picks up to {@code catalogSize} funds, bounding how many come from any one
-	 * sub-category.
+	 * Fills the budget from the goal's preferred sleeves first, topping up from
+	 * the remaining sleeves only when those cannot fill it.
 	 *
-	 * <p>The cap is {@code catalogSize / distinctSubCategories} rather than a fixed
-	 * fraction, so the shortlist is only trimmed when it would otherwise be
-	 * dominated. When just one sub-category is eligible the cap equals the whole
-	 * budget and nothing is needlessly withheld from the model.
-	 *
-	 * <p>Buckets are visited in {@link FundSubCategory} order and sorted by scheme
-	 * name, so the same request always produces the same shortlist.
+	 * <p>Buckets are ordered by {@link FundSubCategory} declaration order and
+	 * sorted by scheme name, so the same request always produces the same list.
 	 */
-	private List<Fund> balance(Collection<Fund> eligible) {
+	private List<Fund> balance(Collection<Fund> eligible, PortfolioPolicy policy) {
 		Map<FundSubCategory, List<Fund>> bySubCategory = new EnumMap<>(FundSubCategory.class);
 		for (Fund fund : eligible) {
 			bySubCategory.computeIfAbsent(fund.getSubCategory(), key -> new ArrayList<>()).add(fund);
 		}
 		bySubCategory.values().forEach(bucket -> bucket.sort(Comparator.comparing(Fund::getSchemeName)));
 
-		int capPerSubCategory = Math.max(1, catalogSize / bySubCategory.size());
-
-		return bySubCategory.values().stream()
-				.flatMap(bucket -> bucket.stream().limit(capPerSubCategory))
-				.limit(catalogSize)
+		List<FundSubCategory> preferred = policy.prioritizedSubCategories().stream()
+				.filter(bySubCategory::containsKey)
 				.toList();
+		// No goal-preferred sleeve survives the risk filter: fall back to the whole
+		// eligible set rather than returning nothing.
+		List<FundSubCategory> primary = preferred.isEmpty()
+				? new ArrayList<>(bySubCategory.keySet())
+				: preferred;
+
+		List<Fund> shortlist = new ArrayList<>(catalogSize);
+		int capPerPrimary = Math.max(1, catalogSize / primary.size());
+		for (FundSubCategory sleeve : primary) {
+			addUpTo(shortlist, bySubCategory.get(sleeve), capPerPrimary);
+		}
+
+		if (shortlist.size() < catalogSize) {
+			List<FundSubCategory> fallback = bySubCategory.keySet().stream()
+					.filter(sleeve -> !primary.contains(sleeve))
+					.toList();
+			if (!fallback.isEmpty()) {
+				int capPerFallback = Math.max(1, (catalogSize - shortlist.size()) / fallback.size());
+				for (FundSubCategory sleeve : fallback) {
+					addUpTo(shortlist, bySubCategory.get(sleeve), capPerFallback);
+				}
+			}
+		}
+
+		return shortlist.size() > catalogSize ? shortlist.subList(0, catalogSize) : shortlist;
+	}
+
+	/**
+	 * Appends at most {@code limit} funds from one sleeve, preferring a fund from
+	 * each distinct fund house before repeating a house. Stops early once the
+	 * overall shortlist is full so no sleeve can overrun the budget.
+	 */
+	private void addUpTo(List<Fund> shortlist, List<Fund> bucket, int limit) {
+		if (bucket == null || bucket.isEmpty()) {
+			return;
+		}
+		List<Fund> chosen = new ArrayList<>(limit);
+		Set<String> houses = new HashSet<>();
+
+		for (Fund fund : bucket) {
+			if (chosen.size() >= limit || shortlist.size() + chosen.size() >= catalogSize) {
+				break;
+			}
+			if (houses.add(houseKey(fund))) {
+				chosen.add(fund);
+			}
+		}
+		// Fill any remaining slots with same-house funds only if still under budget.
+		for (Fund fund : bucket) {
+			if (chosen.size() >= limit || shortlist.size() + chosen.size() >= catalogSize) {
+				break;
+			}
+			if (!chosen.contains(fund)) {
+				chosen.add(fund);
+			}
+		}
+		shortlist.addAll(chosen);
+	}
+
+	private static String houseKey(Fund fund) {
+		return fund.getFundHouse() == null ? "" : fund.getFundHouse().toLowerCase(java.util.Locale.ROOT);
 	}
 }
