@@ -1,0 +1,15 @@
+.git
+.gitattributes
+.idea
+.vscode
+.mvn
+target
+*.log
+*.iml
+Dockerfile
+docker-compose.yml
+README.md
+API.md
+HELP.md
+planner.md
+.env
