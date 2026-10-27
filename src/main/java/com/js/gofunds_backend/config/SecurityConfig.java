@@ -64,6 +64,10 @@ public class SecurityConfig {
 				.requestMatchers("/api/v1/auth/me", "/api/v1/auth/logout").authenticated()
 				.requestMatchers("/api/v1/auth/**").permitAll()
 				.requestMatchers(HttpMethod.GET, "/api/v1/funds/**").authenticated()
+				// The guest planner is intentionally reachable without a token. It has
+				// its own per-IP cooldown; this matcher must stay above the planner
+				// catch-all so the authenticated rule does not swallow it.
+				.requestMatchers(HttpMethod.POST, "/api/v1/guest/planner/generate").permitAll()
 				.requestMatchers("/api/v1/planner/**").authenticated()
 				.anyRequest().authenticated()
 			)

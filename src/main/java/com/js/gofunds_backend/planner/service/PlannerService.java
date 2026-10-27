@@ -56,13 +56,8 @@ public class PlannerService {
 	 */
 	@Transactional
 	public InvestmentPlanResponse generate(User user, InvestmentPlanRequest request) {
-		Recommendation recommendation = recommendationService.recommend(request);
-		List<PlanFundResponse> funds = withMonthlyAmounts(recommendation, request);
-
-		BigDecimal projectedReturns = calculatorService.projectedReturns(
-				request.monthlyInvestment(),
-				recommendation.blendedReturnRate(),
-				request.investmentHorizon());
+		Draft draft = draft(request);
+		Recommendation recommendation = draft.recommendation();
 
 		InvestmentPlan plan = new InvestmentPlan();
 		plan.setUser(user);
@@ -71,15 +66,48 @@ public class PlannerService {
 		plan.setMonthlyAmount(request.monthlyInvestment());
 		plan.setRiskProfile(recommendation.riskProfile());
 		plan.setAllocationBreakdown(allocationBreakdown(recommendation));
-		plan.setRecommendedFunds(PlanFundMapper.toStored(funds));
-		plan.setProjectedReturns(projectedReturns);
+		plan.setRecommendedFunds(PlanFundMapper.toStored(draft.funds()));
+		plan.setProjectedReturns(draft.projectedReturns());
 		plan.setExplanation(recommendation.explanation());
 		plan.setStatus(PlanStatus.ACTIVE);
 
 		InvestmentPlan saved = investmentPlanRepository.save(plan);
-		log.info("Generated plan {} for user {} with {} funds", saved.getId(), user.getId(), funds.size());
+		log.info("Generated plan {} for user {} with {} funds",
+				saved.getId(), user.getId(), draft.funds().size());
 
-		return toResponse(saved, projectedValue(saved));
+		return toResponse(saved, draft.projectedValue());
+	}
+
+	/**
+	 * Builds a plan exactly like {@link #generate} but does not persist it. Used by
+	 * the guest planner, which hands the result back to the browser and keeps
+	 * nothing in the database.
+	 *
+	 * <p>The id on the response is a transient identifier so the payload matches
+	 * the authenticated generate response; it is not resolvable through any read
+	 * endpoint.
+	 *
+	 * <p>No transaction is opened here: the only database work is the catalogue
+	 * lookup, and holding a connection open across the Gemini call would be waste.
+	 */
+	public InvestmentPlanResponse preview(InvestmentPlanRequest request) {
+		Draft draft = draft(request);
+		Recommendation recommendation = draft.recommendation();
+
+		return new InvestmentPlanResponse(
+				UUID.randomUUID(),
+				request.goal(),
+				request.investmentHorizon(),
+				request.monthlyInvestment(),
+				recommendation.riskProfile(),
+				allocationBreakdown(recommendation),
+				draft.funds(),
+				draft.totalInvested(),
+				draft.projectedValue(),
+				draft.projectedReturns(),
+				recommendation.explanation(),
+				PlanStatus.ACTIVE,
+				LocalDateTime.now());
 	}
 
 	@Transactional(readOnly = true)
@@ -112,6 +140,34 @@ public class PlannerService {
 				.findByIdAndUserIdAndDeletedAtIsNull(planId, user.getId())
 				.orElseThrow(() -> new ApiException(HttpStatus.NOT_FOUND,
 						"No investment plan found for id " + planId));
+	}
+
+	/**
+	 * Everything both generate and preview need before the decision to persist.
+	 * Returns only validated data, so neither caller has to repeat the pipeline.
+	 */
+	private Draft draft(InvestmentPlanRequest request) {
+		Recommendation recommendation = recommendationService.recommend(request);
+		List<PlanFundResponse> funds = withMonthlyAmounts(recommendation, request);
+
+		BigDecimal totalInvested = calculatorService
+				.totalInvested(request.monthlyInvestment(), request.investmentHorizon());
+		BigDecimal projectedReturns = calculatorService.projectedReturns(
+				request.monthlyInvestment(),
+				recommendation.blendedReturnRate(),
+				request.investmentHorizon());
+		BigDecimal projectedValue = totalInvested.add(projectedReturns)
+				.setScale(2, RoundingMode.HALF_UP);
+
+		return new Draft(recommendation, funds, totalInvested, projectedValue, projectedReturns);
+	}
+
+	private record Draft(
+			Recommendation recommendation,
+			List<PlanFundResponse> funds,
+			BigDecimal totalInvested,
+			BigDecimal projectedValue,
+			BigDecimal projectedReturns) {
 	}
 
 	/**
