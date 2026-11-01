@@ -53,6 +53,8 @@ It serves on `http://localhost:8080`. `GET /api/v1/health` is the liveness probe
 | `FUNDS_SYNC_ON_STARTUP` | no | `true` seeds the fund catalogue on boot instead of waiting for the 00:30 IST cron. |
 | `LOG_OTP` | no | `true` prints every OTP to the log. Handy locally so you don't need a real mailbox — but the OTP is a live credential for 15 minutes, so leave it off anywhere you don't control the log. |
 | `PLANNER_CATALOG_SIZE` | no | How many funds go to the model per request. Defaults to 30. |
+| `GUEST_PLANNER_COOLDOWN` | no | How long an IP waits between guest plans. ISO-8601 duration, default `PT24H`. |
+| `GUEST_PLANNER_TRUST_FORWARDED_HEADERS` | no | Honour `X-Forwarded-For` when resolving the guest IP. Only enable behind a proxy that overwrites it. Defaults to `false`. |
 | `AMFI_NAV_URL` / `AMFI_SYNC_CRON` | no | Override the NAV feed or the sync schedule. |
 | `PORT` | no | Defaults to 8080. |
 
@@ -94,6 +96,7 @@ with no `DATABASE_URL`, not a real failure.
 auth/      registration, login, OTP, password reset
 funds/     AMFI sync, the catalogue, keyword classifier
 planner/   Gemini recommendation engine + SIP maths
+guest/     unauthenticated preview plan + per-IP cooldown
 mail/      verification and reset emails
 common/    ApiResponse envelope, JWT, RSA, exception handling
 domain/    JPA entities, enums, repositories

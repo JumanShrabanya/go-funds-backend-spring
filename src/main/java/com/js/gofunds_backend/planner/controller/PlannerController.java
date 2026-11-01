@@ -1,8 +1,11 @@
 package com.js.gofunds_backend.planner.controller;
 
 import com.js.gofunds_backend.common.dto.ApiResponse;
+import com.js.gofunds_backend.common.exception.ApiException;
 import com.js.gofunds_backend.common.security.CurrentUser;
 import com.js.gofunds_backend.domain.entity.User;
+import com.js.gofunds_backend.guest.service.ClientIpResolver;
+import com.js.gofunds_backend.guest.service.GuestPlannerRateLimiter;
 import com.js.gofunds_backend.planner.dto.DashboardStatsResponse;
 import com.js.gofunds_backend.planner.dto.InvestmentPlanRequest;
 import com.js.gofunds_backend.planner.dto.InvestmentPlanResponse;
@@ -12,6 +15,7 @@ import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.Parameter;
 import io.swagger.v3.oas.annotations.responses.ApiResponses;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
@@ -39,6 +43,8 @@ public class PlannerController {
 
 	private final PlannerService plannerService;
 	private final PlannerStatsService plannerStatsService;
+	private final ClientIpResolver clientIpResolver;
+	private final GuestPlannerRateLimiter ipRateLimiter;
 
 	@Operation(summary = "Generate an investment plan",
 			description = """
@@ -51,6 +57,8 @@ public class PlannerController {
 	@ApiResponses({
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
 					responseCode = "201", description = "Plan created"),
+			@io.swagger.v3.oas.annotations.responses.ApiResponse(
+					responseCode = "429", description = "This IP address has reached the plan generation limit"),
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
 					responseCode = "409", description = "The fund catalogue is empty — AMFI has not synced yet"),
 			@io.swagger.v3.oas.annotations.responses.ApiResponse(
@@ -65,7 +73,14 @@ public class PlannerController {
 	public ResponseEntity<ApiResponse<InvestmentPlanResponse>> generate(
 			@Parameter(hidden = true)
 			@CurrentUser User user,
-			@Valid @RequestBody InvestmentPlanRequest request) {
+			@Valid @RequestBody InvestmentPlanRequest request,
+			HttpServletRequest httpRequest) {
+
+		String clientIp = clientIpResolver.resolve(httpRequest);
+		if (!ipRateLimiter.tryAcquire(clientIp)) {
+			throw new ApiException(HttpStatus.TOO_MANY_REQUESTS,
+					"This IP address has reached the plan generation limit. Please try again later.");
+		}
 
 		return ResponseEntity.status(HttpStatus.CREATED)
 				.body(ApiResponse.success(plannerService.generate(user, request)));

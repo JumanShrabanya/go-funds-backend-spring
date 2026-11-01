@@ -15,6 +15,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.context.annotation.Primary;
 
 @Configuration
 @EnableWebSecurity
@@ -26,7 +27,7 @@ public class SecurityConfig {
 
 	public SecurityConfig(
 			JwtAuthenticationFilter jwtAuthenticationFilter,
-			CorsConfigurationSource corsConfigurationSource,
+			@org.springframework.beans.factory.annotation.Qualifier("corsConfigurationSource") CorsConfigurationSource corsConfigurationSource,
 			@Value("${bcrypt.salt-rounds:10}") int bcryptSaltRounds) {
 		this.jwtAuthenticationFilter = jwtAuthenticationFilter;
 		this.corsConfigurationSource = corsConfigurationSource;
@@ -64,6 +65,10 @@ public class SecurityConfig {
 				.requestMatchers("/api/v1/auth/me", "/api/v1/auth/logout").authenticated()
 				.requestMatchers("/api/v1/auth/**").permitAll()
 				.requestMatchers(HttpMethod.GET, "/api/v1/funds/**").authenticated()
+				// The guest planner is intentionally reachable without a token. It has
+				// its own per-IP cooldown; this matcher must stay above the planner
+				// catch-all so the authenticated rule does not swallow it.
+				.requestMatchers(HttpMethod.POST, "/api/v1/guest/planner/generate").permitAll()
 				.requestMatchers("/api/v1/planner/**").authenticated()
 				.anyRequest().authenticated()
 			)

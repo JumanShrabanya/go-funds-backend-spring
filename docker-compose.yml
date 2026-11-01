@@ -30,8 +30,13 @@ services:
       CORS_ORIGINS: ${CORS_ORIGINS:-http://localhost:3000,http://localhost:5173}
       LOG_OTP: ${LOG_OTP:-false}
       FUNDS_SYNC_ON_STARTUP: ${FUNDS_SYNC_ON_STARTUP:-false}
+      GUEST_PLANNER_MAX_ATTEMPTS: ${GUEST_PLANNER_MAX_ATTEMPTS:-3}
+      GUEST_PLANNER_RATE_WINDOW: ${GUEST_PLANNER_RATE_WINDOW:-PT1H}
+      REDIS_URL: ${REDIS_URL:-redis://redis:6379}
     depends_on:
       db:
+        condition: service_healthy
+      redis:
         condition: service_healthy
     restart: unless-stopped
 
@@ -50,6 +55,18 @@ services:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 5s
       timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    container_name: gofunds-redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
       retries: 10
     restart: unless-stopped
 

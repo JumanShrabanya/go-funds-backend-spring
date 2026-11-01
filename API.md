@@ -24,7 +24,7 @@ Two kinds of endpoint:
 
 | | Endpoints | What to send |
 | --- | --- | --- |
-| Public | `/api/v1/auth/register`, `/login`, `/refresh`, `/logout`, `/me`, `/verify-email`, `/resend-otp`, `/forgot-password`, `/reset-password`, `/api/v1/health` | Nothing |
+| Public | `/api/v1/auth/register`, `/login`, `/refresh`, `/logout`, `/me`, `/verify-email`, `/resend-otp`, `/forgot-password`, `/reset-password`, `/api/v1/health`, `/api/v1/guest/planner/generate` | Nothing |
 | Protected | everything under `/api/v1/funds` and `/api/v1/planner` | `Authorization: Bearer <accessToken>` |
 
 Note that all of `/auth` is public, *including* `/me` — it reads the token from the
@@ -162,6 +162,7 @@ Validation failures name the field in `message`, e.g.
 | `POST` | `/api/v1/auth/reset-password` | no |
 | `GET` | `/api/v1/funds` | yes |
 | `GET` | `/api/v1/funds/{schemeCode}` | yes |
+| `POST` | `/api/v1/guest/planner/generate` | no, one per IP |
 | `POST` | `/api/v1/planner/generate` | yes |
 | `GET` | `/api/v1/planner/plans` | yes |
 | `GET` | `/api/v1/planner/plans/{planId}` | yes |
@@ -446,6 +447,49 @@ One fund by AMFI scheme code.
 | `400` | Validation failed |
 | `401` | No token, an expired token, or an unknown account |
 | `404` | No fund with that scheme code |
+
+---
+
+## Guest planner
+
+The planner without an account. Same request body as the authenticated generate
+endpoint, but **nothing is saved**. Each IP address gets one guest plan per cooldown
+window — 24 hours by default, configurable with `GUEST_PLANNER_COOLDOWN`.
+
+### `POST /api/v1/guest/planner/generate`
+
+No `Authorization` header. The body is the same `InvestmentPlanRequest` as the
+authenticated generate endpoint, with the same required fields.
+
+```json
+{
+  "monthlyInvestment": 25000,
+  "goal": "WEALTH_CREATION",
+  "investmentHorizon": "FIVE_TO_TEN_YEARS",
+  "riskProfile": "MODERATE"
+}
+```
+
+`201` → [`InvestmentPlanResponse`](#investmentplanresponse). The payload is shaped
+exactly like a saved plan so the frontend can reuse its rendering, but the `id` is
+transient: it is not stored and cannot be fetched from `/planner/plans/{planId}`.
+
+| Status | When |
+| --- | --- |
+| `201` | Guest plan generated, not saved |
+| `400` | Validation failed |
+| `409` | The fund catalogue is empty — AMFI has not synced yet |
+| `429` | This IP already used its guest plan in the current cooldown window |
+| `502` | Gemini replied, but the reply could not be repaired into a usable plan |
+| `503` | Gemini is not configured (`GEMINI_API_KEY` unset) or unreachable |
+
+A failed generation does **not** consume the IP's attempt: `409`, `502` and `503`
+release the slot so the visitor can retry.
+
+The limiter is in-memory, so restarting the backend clears all cooldowns. If
+`X-Forwarded-For` should be honoured behind a proxy, set
+`GUEST_PLANNER_TRUST_FORWARDED_HEADERS=true` — but only when the proxy overwrites
+that header, because clients can otherwise spoof it.
 
 ---
 
