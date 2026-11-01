@@ -1,112 +1,42 @@
 package com.js.gofunds_backend.guest.service;
 
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.Mock;
+import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.data.redis.core.script.RedisScript;
 
-import java.time.Clock;
-import java.time.Duration;
-import java.time.Instant;
-import java.time.ZoneId;
-import java.time.ZoneOffset;
-import java.util.Optional;
-
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
+@ExtendWith(MockitoExtension.class)
 class GuestPlannerRateLimiterTest {
 
-	private static final String IP = "203.0.113.7";
-	private static final Duration COOLDOWN = Duration.ofHours(24);
-
-	private final MutableClock clock = new MutableClock(Instant.parse("2026-10-26T00:00:00Z"));
+	@Mock
+	private StringRedisTemplate redisTemplate;
 
 	@Test
-	void firstAttemptIsAllowed() {
-		GuestPlannerRateLimiter limiter = limiter();
+	void allowsAnAttemptWhenRedisScriptAcceptsIt() {
+		when(redisTemplate.execute(any(RedisScript.class), anyList(), anyString(), anyString()))
+				.thenReturn(1L);
 
-		assertTrue(limiter.tryAcquire(IP).isPresent());
-	}
+		GuestPlannerRateLimiter limiter = new GuestPlannerRateLimiter(redisTemplate, 3, "PT1H");
 
-	@Test
-	void secondAttemptIsRejectedWithinTheCooldown() {
-		GuestPlannerRateLimiter limiter = limiter();
-		limiter.tryAcquire(IP);
-
-		clock.advance(Duration.ofHours(23));
-
-		assertTrue(limiter.tryAcquire(IP).isEmpty());
+		assertTrue(limiter.tryAcquire("203.0.113.7"));
 	}
 
 	@Test
-	void attemptIsAllowedAgainAfterTheCooldown() {
-		GuestPlannerRateLimiter limiter = limiter();
-		limiter.tryAcquire(IP);
+	void rejectsAnAttemptWhenRedisScriptReportsTheLimit() {
+		when(redisTemplate.execute(any(RedisScript.class), anyList(), anyString(), anyString()))
+				.thenReturn(0L);
 
-		clock.advance(COOLDOWN);
+		GuestPlannerRateLimiter limiter = new GuestPlannerRateLimiter(redisTemplate, 3, "PT1H");
 
-		assertTrue(limiter.tryAcquire(IP).isPresent());
-	}
-
-	@Test
-	void differentIpsDoNotShareTheLimit() {
-		GuestPlannerRateLimiter limiter = limiter();
-		limiter.tryAcquire(IP);
-
-		assertTrue(limiter.tryAcquire("198.51.100.4").isPresent());
-	}
-
-	@Test
-	void releasingTheReservationAllowsAnImmediateRetry() {
-		GuestPlannerRateLimiter limiter = limiter();
-		Optional<Instant> reservation = limiter.tryAcquire(IP);
-		assertTrue(reservation.isPresent());
-
-		limiter.release(IP, reservation.orElseThrow());
-
-		assertTrue(limiter.tryAcquire(IP).isPresent());
-	}
-
-	@Test
-	void releaseDoesNotClearANewerReservation() {
-		GuestPlannerRateLimiter limiter = limiter();
-		Instant first = limiter.tryAcquire(IP).orElseThrow();
-
-		clock.advance(COOLDOWN);
-		Instant second = limiter.tryAcquire(IP).orElseThrow();
-
-		limiter.release(IP, first);
-
-		assertTrue(limiter.tryAcquire(IP).isEmpty());
-		assertTrue(second.isAfter(first));
-	}
-
-	private GuestPlannerRateLimiter limiter() {
-		return new GuestPlannerRateLimiter(COOLDOWN, clock);
-	}
-
-	private static final class MutableClock extends Clock {
-
-		private Instant now;
-
-		private MutableClock(Instant start) {
-			this.now = start;
-		}
-
-		private void advance(Duration duration) {
-			now = now.plus(duration);
-		}
-
-		@Override
-		public ZoneId getZone() {
-			return ZoneOffset.UTC;
-		}
-
-		@Override
-		public Clock withZone(ZoneId zone) {
-			return this;
-		}
-
-		@Override
-		public Instant instant() {
-			return now;
-		}
+		assertFalse(limiter.tryAcquire("203.0.113.7"));
 	}
 }

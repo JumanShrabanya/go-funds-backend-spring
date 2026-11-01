@@ -15,6 +15,7 @@ import org.springframework.security.web.SecurityFilterChain;
 import org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter;
 import org.springframework.security.web.authentication.HttpStatusEntryPoint;
 import org.springframework.web.cors.CorsConfigurationSource;
+import org.springframework.context.annotation.Primary;
 
 @Configuration
 @EnableWebSecurity
@@ -26,7 +27,7 @@ public class SecurityConfig {
 
 	public SecurityConfig(
 			JwtAuthenticationFilter jwtAuthenticationFilter,
-			CorsConfigurationSource corsConfigurationSource,
+			@org.springframework.beans.factory.annotation.Qualifier("corsConfigurationSource") CorsConfigurationSource corsConfigurationSource,
 			@Value("${bcrypt.salt-rounds:10}") int bcryptSaltRounds) {
 		this.jwtAuthenticationFilter = jwtAuthenticationFilter;
 		this.corsConfigurationSource = corsConfigurationSource;

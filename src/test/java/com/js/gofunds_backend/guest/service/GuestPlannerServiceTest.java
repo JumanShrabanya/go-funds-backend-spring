@@ -16,11 +16,9 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 
 import java.math.BigDecimal;
-import java.time.Instant;
 import java.time.LocalDateTime;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.UUID;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -52,7 +50,7 @@ class GuestPlannerServiceTest {
 	@Test
 	void returnsThePreviewWithoutSavingIt() {
 		InvestmentPlanResponse preview = preview();
-		when(rateLimiter.tryAcquire(IP)).thenReturn(Optional.of(Instant.now()));
+		when(rateLimiter.tryAcquire(IP)).thenReturn(true);
 		when(plannerService.preview(request)).thenReturn(preview);
 
 		InvestmentPlanResponse result = guestPlannerService.generate(request, IP);
@@ -63,25 +61,13 @@ class GuestPlannerServiceTest {
 
 	@Test
 	void rejectsAnIpThatHasAlreadyUsedItsGuestPlan() {
-		when(rateLimiter.tryAcquire(IP)).thenReturn(Optional.empty());
+		when(rateLimiter.tryAcquire(IP)).thenReturn(false);
 
 		ApiException error = assertThrows(ApiException.class,
 				() -> guestPlannerService.generate(request, IP));
 
 		assertEquals(HttpStatus.TOO_MANY_REQUESTS, error.getStatus());
 		verify(plannerService, never()).preview(any());
-	}
-
-	@Test
-	void releasesTheSlotWhenGenerationFails() {
-		Instant reservation = Instant.now();
-		when(rateLimiter.tryAcquire(IP)).thenReturn(Optional.of(reservation));
-		when(plannerService.preview(request))
-				.thenThrow(new ApiException(HttpStatus.SERVICE_UNAVAILABLE, "Gemini unreachable"));
-
-		assertThrows(ApiException.class, () -> guestPlannerService.generate(request, IP));
-
-		verify(rateLimiter).release(IP, reservation);
 	}
 
 	private static InvestmentPlanResponse preview() {

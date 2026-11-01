@@ -9,9 +9,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 
-import java.time.Instant;
-import java.util.Optional;
-
 /**
  * Generates a plan without an account.
  *
@@ -21,9 +18,7 @@ import java.util.Optional;
  * endpoint and returns the result directly.
  *
  * <p>
- * One visitor gets one plan per cooldown. Failed generations release the slot,
- * so an empty catalogue or a Gemini outage does not use up the visitor's
- * attempt.
+ * The IP limit is applied to generation attempts before the expensive AI call.
  */
 @Slf4j
 @Service
@@ -34,25 +29,19 @@ public class GuestPlannerService {
 	private final GuestPlannerRateLimiter rateLimiter;
 
 	/**
-	 * @throws ApiException 429 when this IP has already used its guest plan,
+	 * @throws ApiException 429 when this IP has exhausted its guest plan attempts,
 	 *                      409/502/503 from the planner when a plan cannot be
 	 *                      produced
 	 */
 	public InvestmentPlanResponse generate(InvestmentPlanRequest request, String clientIp) {
-		Optional<Instant> reservation = rateLimiter.tryAcquire(clientIp);
-		if (reservation.isEmpty()) {
+		if (!rateLimiter.tryAcquire(clientIp)) {
 			throw new ApiException(HttpStatus.TOO_MANY_REQUESTS,
-					"A guest plan has already been generated from this IP address. "
-							+ "Sign in to generate and save more plans.");
+					"This IP address has reached the guest plan generation limit. "
+							+ "Please try again later or sign in to save more plans.");
 		}
 
-		try {
-			InvestmentPlanResponse plan = plannerService.preview(request);
-			log.info("Generated guest plan for {}", clientIp);
-			return plan;
-		} catch (RuntimeException ex) {
-			rateLimiter.release(clientIp, reservation.get());
-			throw ex;
-		}
+		InvestmentPlanResponse plan = plannerService.preview(request);
+		log.info("Generated guest plan for {}", clientIp);
+		return plan;
 	}
 }
